@@ -292,6 +292,10 @@ func (b *builder) writeCharClassMatcher(ch *ast.CharClassMatcher) {
 		b.writelnf("nil,")
 		return
 	}
+	if ch.InlineExpr {
+		b.writelnf("&charClassExpr{")
+		b.writef("matcher: ")
+	}
 	b.writelnf("&charClassMatcher{")
 	pos := ch.Pos()
 	b.writelnf("\tpos: position{line: %d, col: %d, offset: %d},", pos.Line, pos.Col, pos.Off)
@@ -332,6 +336,9 @@ func (b *builder) writeCharClassMatcher(ch *ast.CharClassMatcher) {
 	b.writelnf("\tignoreCase: %t,", ch.IgnoreCase)
 	b.writelnf("\tinverted: %t,", ch.Inverted)
 	b.writelnf("},")
+	if ch.InlineExpr {
+		b.writelnf("},")
+	}
 }
 
 // BasicLatinLookup calculates the decision results for the first 256 characters of the UTF-8 character

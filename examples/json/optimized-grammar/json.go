@@ -221,15 +221,14 @@ var g = &grammar{
 															&seqExpr{
 																pos: position{line: 64, col: 16, offset: 1577},
 																exprs: []interface{}{
-																	&notExpr{
-																		pos: position{line: 64, col: 16, offset: 1577},
-																		expr: &charClassMatcher{
+																	&charClassExpr{
+																		matcher: &charClassMatcher{
 																			pos:        position{line: 69, col: 15, offset: 1751},
-																			val:        "[\"\\\\\\x00-\\x1f]",
+																			val:        "[^\"\\\\\\x00-\\x1f]",
 																			chars:      []rune{'"', '\\'},
 																			ranges:     []rune{'\x00', '\x1f'},
 																			ignoreCase: false,
-																			inverted:   false,
+																			inverted:   true,
 																		},
 																	},
 																	&anyMatcher{
@@ -313,7 +312,7 @@ var g = &grammar{
 									},
 									&actionExpr{
 										pos: position{line: 83, col: 8, offset: 2001},
-										run: (*parser).callonValue49,
+										run: (*parser).callonValue48,
 										expr: &litMatcher{
 											pos:        position{line: 83, col: 8, offset: 2001},
 											val:        "true",
@@ -323,7 +322,7 @@ var g = &grammar{
 									},
 									&actionExpr{
 										pos: position{line: 83, col: 38, offset: 2031},
-										run: (*parser).callonValue51,
+										run: (*parser).callonValue50,
 										expr: &litMatcher{
 											pos:        position{line: 83, col: 38, offset: 2031},
 											val:        "false",
@@ -333,7 +332,7 @@ var g = &grammar{
 									},
 									&actionExpr{
 										pos: position{line: 85, col: 8, offset: 2071},
-										run: (*parser).callonValue53,
+										run: (*parser).callonValue52,
 										expr: &litMatcher{
 											pos:        position{line: 85, col: 8, offset: 2071},
 											val:        "null",
@@ -411,15 +410,14 @@ var g = &grammar{
 																&seqExpr{
 																	pos: position{line: 64, col: 16, offset: 1577},
 																	exprs: []interface{}{
-																		&notExpr{
-																			pos: position{line: 64, col: 16, offset: 1577},
-																			expr: &charClassMatcher{
+																		&charClassExpr{
+																			matcher: &charClassMatcher{
 																				pos:        position{line: 69, col: 15, offset: 1751},
-																				val:        "[\"\\\\\\x00-\\x1f]",
+																				val:        "[^\"\\\\\\x00-\\x1f]",
 																				chars:      []rune{'"', '\\'},
 																				ranges:     []rune{'\x00', '\x1f'},
 																				ignoreCase: false,
-																				inverted:   false,
+																				inverted:   true,
 																			},
 																		},
 																		&anyMatcher{
@@ -554,7 +552,7 @@ var g = &grammar{
 													},
 													&actionExpr{
 														pos: position{line: 64, col: 10, offset: 1571},
-														run: (*parser).callonObject40,
+														run: (*parser).callonObject39,
 														expr: &seqExpr{
 															pos: position{line: 64, col: 10, offset: 1571},
 															exprs: []interface{}{
@@ -572,15 +570,14 @@ var g = &grammar{
 																			&seqExpr{
 																				pos: position{line: 64, col: 16, offset: 1577},
 																				exprs: []interface{}{
-																					&notExpr{
-																						pos: position{line: 64, col: 16, offset: 1577},
-																						expr: &charClassMatcher{
+																					&charClassExpr{
+																						matcher: &charClassMatcher{
 																							pos:        position{line: 69, col: 15, offset: 1751},
-																							val:        "[\"\\\\\\x00-\\x1f]",
+																							val:        "[^\"\\\\\\x00-\\x1f]",
 																							chars:      []rune{'"', '\\'},
 																							ranges:     []rune{'\x00', '\x1f'},
 																							ignoreCase: false,
-																							inverted:   false,
+																							inverted:   true,
 																						},
 																					},
 																					&anyMatcher{
@@ -824,34 +821,34 @@ func (p *parser) callonValue29() (interface{}, error) {
 	return p.cur.onValue29()
 }
 
-func (c *current) onValue49() (interface{}, error) {
+func (c *current) onValue48() (interface{}, error) {
 	return true, nil
 }
 
-func (p *parser) callonValue49() (interface{}, error) {
+func (p *parser) callonValue48() (interface{}, error) {
 	stack := p.vstack[len(p.vstack)-1]
 	_ = stack
-	return p.cur.onValue49()
+	return p.cur.onValue48()
 }
 
-func (c *current) onValue51() (interface{}, error) {
+func (c *current) onValue50() (interface{}, error) {
 	return false, nil
 }
 
-func (p *parser) callonValue51() (interface{}, error) {
+func (p *parser) callonValue50() (interface{}, error) {
 	stack := p.vstack[len(p.vstack)-1]
 	_ = stack
-	return p.cur.onValue51()
+	return p.cur.onValue50()
 }
 
-func (c *current) onValue53() (interface{}, error) {
+func (c *current) onValue52() (interface{}, error) {
 	return nil, nil
 }
 
-func (p *parser) callonValue53() (interface{}, error) {
+func (p *parser) callonValue52() (interface{}, error) {
 	stack := p.vstack[len(p.vstack)-1]
 	_ = stack
-	return p.cur.onValue53()
+	return p.cur.onValue52()
 }
 
 func (c *current) onValue1(val interface{}) (interface{}, error) {
@@ -875,15 +872,15 @@ func (p *parser) callonObject9() (interface{}, error) {
 	return p.cur.onObject9()
 }
 
-func (c *current) onObject40() (interface{}, error) {
+func (c *current) onObject39() (interface{}, error) {
 	c.text = bytes.Replace(c.text, []byte(`\/`), []byte(`/`), -1)
 	return strconv.Unquote(string(c.text))
 }
 
-func (p *parser) callonObject40() (interface{}, error) {
+func (p *parser) callonObject39() (interface{}, error) {
 	stack := p.vstack[len(p.vstack)-1]
 	_ = stack
-	return p.cur.onObject40()
+	return p.cur.onObject39()
 }
 
 func (c *current) onObject1(vals interface{}) (interface{}, error) {
@@ -1249,6 +1246,7 @@ type litMatcher struct {
 	val        string
 	ignoreCase bool
 	want       string
+	invert     bool
 }
 
 // nolint: structcheck
@@ -1261,6 +1259,11 @@ type charClassMatcher struct {
 	classes         []*unicode.RangeTable
 	ignoreCase      bool
 	inverted        bool
+}
+
+// nolint: structcheck
+type charClassExpr struct {
+	matcher *charClassMatcher
 }
 
 type anyMatcher position // nolint: structcheck
@@ -1816,6 +1819,8 @@ func (p *parser) parseExpr(expr interface{}) (interface{}, bool) {
 		val, ok = p.parseAnyMatcher(expr)
 	case *charClassMatcher:
 		val, ok = p.parseCharClassMatcher(expr)
+	case *charClassExpr:
+		val, ok = p.parseCharClassExpr(expr.matcher)
 	case *choiceExpr:
 		val, ok = p.parseChoiceExpr(expr)
 	case *labeledExpr:
@@ -1922,6 +1927,91 @@ func (p *parser) parseAnyMatcher(any *anyMatcher) (interface{}, bool) {
 	p.read()
 	p.failAt(true, start.position, ".")
 	return p.sliceFrom(start), true
+}
+
+// nolint: gocyclo
+func (p *parser) parseCharClassExpr(chr *charClassMatcher) (interface{}, bool) {
+	if p.debug {
+		defer p.out(p.in("parseCharClassExpr"))
+	}
+
+	cur := p.pt.rn
+	start := p.pt
+
+	p.pushV()
+	var out interface{}
+	var matched bool
+
+	// can't match EOF
+	if cur == utf8.RuneError && p.pt.w == 0 { // see utf8.DecodeRune
+		p.failAt(false, start.position, chr.val)
+		goto end
+	}
+
+	if chr.ignoreCase {
+		cur = unicode.ToLower(cur)
+	}
+
+	// try to match in the list of available chars
+	for _, rn := range chr.chars {
+		if rn == cur {
+			if chr.inverted {
+				p.failAt(false, start.position, chr.val)
+				goto end
+			}
+			p.read()
+			p.failAt(true, start.position, chr.val)
+
+			out = p.sliceFrom(start)
+			matched = true
+			goto end
+		}
+	}
+
+	// try to match in the list of ranges
+	for i := 0; i < len(chr.ranges); i += 2 {
+		if cur >= chr.ranges[i] && cur <= chr.ranges[i+1] {
+			if chr.inverted {
+				p.failAt(false, start.position, chr.val)
+				goto end
+			}
+			p.read()
+			p.failAt(true, start.position, chr.val)
+			out = p.sliceFrom(start)
+			matched = true
+			goto end
+		}
+	}
+
+	// try to match in the list of Unicode classes
+	for _, cl := range chr.classes {
+		if unicode.Is(cl, cur) {
+			if chr.inverted {
+				p.failAt(false, start.position, chr.val)
+				goto end
+			}
+			p.read()
+			p.failAt(true, start.position, chr.val)
+
+			out = p.sliceFrom(start)
+			matched = true
+			goto end
+		}
+	}
+
+	if chr.inverted {
+		p.read()
+		p.failAt(true, start.position, chr.val)
+		out = p.sliceFrom(start)
+		matched = true
+		goto end
+	}
+	p.failAt(false, start.position, chr.val)
+
+end:
+	p.popV()
+	p.restore(start)
+	return out, matched
 }
 
 // nolint: gocyclo
@@ -2050,6 +2140,10 @@ func (p *parser) parseLitMatcher(lit *litMatcher) (interface{}, bool) {
 		defer p.out(p.in("parseLitMatcher"))
 	}
 
+	if lit.invert {
+		p.maxFailInvertExpected = !p.maxFailInvertExpected
+	}
+
 	start := p.pt
 	for _, want := range lit.val {
 		cur := p.pt.rn
@@ -2064,6 +2158,10 @@ func (p *parser) parseLitMatcher(lit *litMatcher) (interface{}, bool) {
 		p.read()
 	}
 	p.failAt(true, start.position, lit.want)
+
+	if lit.invert {
+		p.maxFailInvertExpected = !p.maxFailInvertExpected
+	}
 	return p.sliceFrom(start), true
 }
 

@@ -340,7 +340,9 @@ type litMatcher struct {
 	val        string
 	ignoreCase bool
 	want       string
+	invert 	   bool
 }
+
 
 //{{ if .Nolint }} nolint: structcheck {{else}} ==template== {{ end }}
 type charClassMatcher struct {
@@ -352,6 +354,11 @@ type charClassMatcher struct {
 	classes         []*unicode.RangeTable
 	ignoreCase      bool
 	inverted        bool
+}
+
+//{{ if .Nolint }} nolint: structcheck {{else}} ==template== {{ end }}
+type charClassExpr struct {
+	matcher *charClassMatcher
 }
 
 type anyMatcher position //{{ if .Nolint }} nolint: structcheck {{else}} ==template== {{ end }}
@@ -936,6 +943,8 @@ func (p *parser) parseExpr(expr interface{}) (interface{}, bool) {
 		val, ok = p.parseAnyMatcher(expr)
 	case *charClassMatcher:
 		val, ok = p.parseCharClassMatcher(expr)
+	case *charClassExpr:
+		val, ok = p.parseCharClassExpr(expr.matcher)
 	case *choiceExpr:
 		val, ok = p.parseChoiceExpr(expr)
 	case *labeledExpr:
@@ -1068,6 +1077,110 @@ func (p *parser) parseAnyMatcher(any *anyMatcher) (interface{}, bool) {
 	p.read()
 	p.failAt(true, start.position, ".")
 	return p.sliceFrom(start), true
+}
+
+
+//{{ if .Nolint }} nolint: gocyclo {{else}} ==template== {{ end }}
+func (p *parser) parseCharClassExpr(chr *charClassMatcher) (interface{}, bool) {
+	// ==template== {{ if not .Optimize }}
+	if p.debug {
+		defer p.out(p.in("parseCharClassExpr"))
+	}
+
+	// {{ end }} ==template==
+	cur := p.pt.rn
+	start := p.pt
+
+	p.pushV()
+	var out interface{}
+	var matched bool
+
+	// ==template== {{ if .BasicLatinLookupTable }}
+	if cur < 128 {
+		if chr.basicLatinChars[cur] != chr.inverted {
+			p.read()
+			p.failAt(true, start.position, chr.val)
+
+			out = p.sliceFrom(start)
+			matched = true
+			goto end
+		}
+		p.failAt(false, start.position, chr.val)
+
+		goto end
+	}
+	// {{ end }} ==template==
+
+	// can't match EOF
+	if cur == utf8.RuneError && p.pt.w == 0 { // see utf8.DecodeRune
+		p.failAt(false, start.position, chr.val)
+		goto end
+	}
+
+	if chr.ignoreCase {
+		cur = unicode.ToLower(cur)
+	}
+
+	// try to match in the list of available chars
+	for _, rn := range chr.chars {
+		if rn == cur {
+			if chr.inverted {
+				p.failAt(false, start.position, chr.val)
+				goto end
+			}
+			p.read()
+			p.failAt(true, start.position, chr.val)
+
+			out = p.sliceFrom(start)
+			matched = true
+			goto end
+		}
+	}
+
+	// try to match in the list of ranges
+	for i := 0; i < len(chr.ranges); i += 2 {
+		if cur >= chr.ranges[i] && cur <= chr.ranges[i+1] {
+			if chr.inverted {
+				p.failAt(false, start.position, chr.val)
+				goto end
+			}
+			p.read()
+			p.failAt(true, start.position, chr.val)
+			out = p.sliceFrom(start)
+			matched = true
+			goto end
+		}
+	}
+
+	// try to match in the list of Unicode classes
+	for _, cl := range chr.classes {
+		if unicode.Is(cl, cur) {
+			if chr.inverted {
+				p.failAt(false, start.position, chr.val)
+				goto end
+			}
+			p.read()
+			p.failAt(true, start.position, chr.val)
+
+			out = p.sliceFrom(start)
+			matched = true
+			goto end
+		}
+	}
+
+	if chr.inverted {
+		p.read()
+		p.failAt(true, start.position, chr.val)
+		out = p.sliceFrom(start)
+		matched = true
+		goto end
+	}
+	p.failAt(false, start.position, chr.val)
+
+end:
+	p.popV()
+	p.restore(start)
+	return out, matched
 }
 
 //{{ if .Nolint }} nolint: gocyclo {{else}} ==template== {{ end }}
@@ -1228,6 +1341,10 @@ func (p *parser) parseLitMatcher(lit *litMatcher) (interface{}, bool) {
 	}
 
 	// {{ end }} ==template==
+	if lit.invert {
+		p.maxFailInvertExpected = !p.maxFailInvertExpected
+	}
+
 	start := p.pt
 	for _, want := range lit.val {
 		cur := p.pt.rn
@@ -1242,6 +1359,10 @@ func (p *parser) parseLitMatcher(lit *litMatcher) (interface{}, bool) {
 		p.read()
 	}
 	p.failAt(true, start.position, lit.want)
+
+	if lit.invert {
+		p.maxFailInvertExpected = !p.maxFailInvertExpected
+	}
 	return p.sliceFrom(start), true
 }
 

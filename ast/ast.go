@@ -429,6 +429,7 @@ func (n *NotCodeExpr) String() string {
 type LitMatcher struct {
 	posValue   // can be str, rstr or char
 	IgnoreCase bool
+	invert     bool
 }
 
 // NewLitMatcher creates a new literal matcher at the specified position and
@@ -455,6 +456,7 @@ type CharClassMatcher struct {
 	Chars          []rune
 	Ranges         []rune // pairs of low/high range
 	UnicodeClasses []string
+	InlineExpr     bool // expr value logic inlined by optimizer to remove out expr
 }
 
 // NewCharClassMatcher creates a new character class matcher at the specified

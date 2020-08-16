@@ -2,9 +2,13 @@ package ast
 
 import (
 	"bytes"
+	"log"
+	"reflect"
 	"strconv"
 	"strings"
 )
+
+var hack bool = true
 
 type grammarOptimizer struct {
 	rule            string
@@ -13,6 +17,7 @@ type grammarOptimizer struct {
 	ruleUsesRules   map[string]map[string]struct{}
 	ruleUsedByRules map[string]map[string]struct{}
 	visitor         func(expr Expression) Visitor
+	visitReplacer   func(expr Expression, replacer func(Expression)) VisitReplacer
 	optimized       bool
 }
 
@@ -28,7 +33,7 @@ func newGrammarOptimizer(protectedRules []string) *grammarOptimizer {
 		ruleUsesRules:   make(map[string]map[string]struct{}),
 		ruleUsedByRules: make(map[string]map[string]struct{}),
 	}
-	r.visitor = r.init
+	r.setVisitor(r.init)
 	return &r
 }
 
@@ -36,7 +41,43 @@ func newGrammarOptimizer(protectedRules []string) *grammarOptimizer {
 // The actual function, which should be used during Walk
 // is held in ruleRefOptimizer.visitor
 func (r *grammarOptimizer) Visit(expr Expression) Visitor {
-	return r.visitor(expr)
+	self := r.visitor(expr)
+	return self
+}
+
+// Visit is a generic Visitor to be used with Walk
+// The actual function, which should be used during Walk
+// is held in ruleRefOptimizer.visitor
+func (r *grammarOptimizer) VisitReplace(expr Expression, replacer func(Expression)) VisitReplacer {
+	return r.visitReplacer(expr, replacer)
+}
+
+func (r *grammarOptimizer) setVisitor(visitor0 interface{}) {
+	log.Printf("setVisitor: %#v", reflect.ValueOf(visitor0))
+	if visitReplacer, ok := visitor0.(func(Expression, func(Expression)) VisitReplacer); ok {
+
+		r.visitor = func(expr Expression) Visitor {
+			if v := visitReplacer(expr, func(expr Expression) {}); v == nil {
+				return nil
+			}
+			return r
+		}
+		r.visitReplacer = visitReplacer
+		return
+	}
+
+	if visitor, ok := visitor0.(func(Expression) Visitor); ok {
+		r.visitor = visitor
+		r.visitReplacer = func(expr Expression, replacer func(Expression)) VisitReplacer {
+			if v := visitor(expr); v == nil {
+				return nil
+			}
+			return r
+		}
+		return
+	}
+
+	panic("invalid visitor function!")
 }
 
 // init is a Visitor, which is used with the Walk function
@@ -65,10 +106,40 @@ func set(m map[string]map[string]struct{}, src, dst string) {
 	m[src][dst] = struct{}{}
 }
 
+// // Replace an expression by upating it in the correct place in the parent.
+// // Will panic if r.parent is nil or the replacement expr is not the correct type.
+// func (r *grammarOptimizer) replace(target, expr Expression) {
+// 	switch parent := target.(type) {
+// 	case *ActionExpr:
+// 		parent.Expr = expr
+// 	case *AndExpr:
+// 		parent.Expr = expr
+// 	case *ChoiceExpr:
+// 		parent.Alternatives[r.i] = expr
+// 	case *Grammar:
+// 		parent.Rules[r.i] = expr.(*Rule)
+// 	case *LabeledExpr:
+// 		parent.Expr = expr
+// 	case *NotExpr:
+// 		parent.Expr = expr
+// 	case *OneOrMoreExpr:
+// 		parent.Expr = expr
+// 	case *Rule:
+// 		parent.Expr = expr
+// 	case *SeqExpr:
+
+// 		parent.Exprs[r.i] = expr
+// 	case *ZeroOrMoreExpr:
+// 		parent.Expr = expr
+// 	case *ZeroOrOneExpr:
+// 		parent.Expr = expr
+// 	}
+// }
+
 // optimize is a Visitor, which is used with the Walk function
 // The purpose of this function is to perform the actual optimizations.
 // See Optimize for a detailed list of the performed optimizations.
-func (r *grammarOptimizer) optimize(expr0 Expression) Visitor {
+func (r *grammarOptimizer) optimize(expr0 Expression, replacer func(Expression)) VisitReplacer {
 	switch expr := expr0.(type) {
 	case *ActionExpr:
 		expr.Expr = r.optimizeRule(expr.Expr)
@@ -174,7 +245,14 @@ func (r *grammarOptimizer) optimize(expr0 Expression) Visitor {
 	case *LabeledExpr:
 		expr.Expr = r.optimizeRule(expr.Expr)
 	case *NotExpr:
+		// Remove the not by inverting the CharClassMatcher
 		expr.Expr = r.optimizeRule(expr.Expr)
+		if charClassExpr, ok := expr.Expr.(*CharClassMatcher); ok {
+			charClassExpr.Inverted = !charClassExpr.Inverted
+			charClassExpr.InlineExpr = true
+			// r.optimized = true
+			replacer(charClassExpr)
+		}
 	case *OneOrMoreExpr:
 		expr.Expr = r.optimizeRule(expr.Expr)
 	case *Rule:
@@ -230,6 +308,14 @@ func (r *grammarOptimizer) optimizeRule(expr Expression) Expression {
 	// Optimize RuleRefExpr
 	if ruleRef, ok := expr.(*RuleRefExpr); ok {
 		if _, ok := r.ruleUsesRules[ruleRef.Name.Val]; !ok {
+			// rule not found
+			if _, ruleExists := r.rules[ruleRef.Name.Val]; !ruleExists {
+				if hack {
+					log.Printf("Rule Not Found: %s", ruleRef.Name.Val)
+				}
+				return expr
+			}
+
 			r.optimized = true
 			delete(r.ruleUsedByRules[ruleRef.Name.Val], r.rule)
 			if len(r.ruleUsedByRules[ruleRef.Name.Val]) == 0 {
@@ -238,6 +324,9 @@ func (r *grammarOptimizer) optimizeRule(expr Expression) Expression {
 			delete(r.ruleUsesRules[r.rule], ruleRef.Name.Val)
 			if len(r.ruleUsesRules[r.rule]) == 0 {
 				delete(r.ruleUsesRules, r.rule)
+			}
+			if hack {
+				log.Printf("optimizing ruleRef: %s", ruleRef.Name.Val)
 			}
 			// TODO: Check if reference exists, otherwise raise an error, which reference is missing!
 			return cloneExpr(r.rules[ruleRef.Name.Val].Expr)
@@ -294,6 +383,7 @@ func cloneExpr(expr Expression) Expression {
 			posValue:       expr.posValue,
 			Ranges:         append([]rune{}, expr.Ranges...),
 			UnicodeClasses: append([]string{}, expr.UnicodeClasses...),
+			InlineExpr:     expr.InlineExpr,
 		}
 	case *ChoiceExpr:
 		alts := make([]Expression, 0, len(expr.Alternatives))
@@ -449,6 +539,7 @@ func escapeRune(r rune) string {
 // * resolve nested sequences expression
 // * resolve sequence expressions with only one element
 // * combine character class matcher and literal matcher, where possible
+// * combine not and character class matcher, where possible
 func Optimize(g *Grammar, alternateEntrypoints ...string) {
 	entrypoints := alternateEntrypoints
 	if len(g.Rules) > 0 {
@@ -458,12 +549,12 @@ func Optimize(g *Grammar, alternateEntrypoints ...string) {
 	r := newGrammarOptimizer(entrypoints)
 	Walk(r, g)
 
-	r.visitor = r.optimize
+	r.setVisitor(r.optimize)
 	r.optimized = true
 	for r.optimized {
 		Walk(r, g)
 	}
 
-	r.visitor = r.cleanupCharClassMatcher
+	r.setVisitor(r.cleanupCharClassMatcher)
 	Walk(r, g)
 }
