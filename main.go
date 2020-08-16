@@ -50,6 +50,7 @@ func main() {
 		optimizeGrammar        = fs.Bool("optimize-grammar", false, "optimize the given grammar (EXPERIMENTAL FEATURE)")
 		optimizeParserFlag     = fs.Bool("optimize-parser", false, "generate optimized parser without Debug and Memoize options")
 		recvrNmFlag            = fs.String("receiver-name", "c", "receiver name for the generated methods")
+		_                      = fs.String("whatever", "", "a useless example command")
 		noBuildFlag            = fs.Bool("x", false, "do not build, only parse")
 
 		altEntrypointsFlag ruleNamesFlag
