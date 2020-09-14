@@ -2,11 +2,14 @@ package ast
 
 import (
 	"bytes"
-	"log"
-	"reflect"
 	"strconv"
 	"strings"
 )
+
+type optFlags struct {
+	ReuseVals bool
+	SkipVals  bool
+}
 
 var hack bool = true
 
@@ -16,8 +19,7 @@ type grammarOptimizer struct {
 	rules           map[string]*Rule
 	ruleUsesRules   map[string]map[string]struct{}
 	ruleUsedByRules map[string]map[string]struct{}
-	visitor         func(expr Expression) Visitor
-	visitReplacer   func(expr Expression, replacer func(Expression)) VisitReplacer
+	visitor         func(expr Expression, br Backref) Visitor
 	optimized       bool
 }
 
@@ -40,35 +42,19 @@ func newGrammarOptimizer(protectedRules []string) *grammarOptimizer {
 // Visit is a generic Visitor to be used with Walk
 // The actual function, which should be used during Walk
 // is held in ruleRefOptimizer.visitor
-func (r *grammarOptimizer) Visit(expr Expression) Visitor {
-	self := r.visitor(expr)
+func (r *grammarOptimizer) Visit(expr Expression, br Backref) Visitor {
+	self := r.visitor(expr, br)
 	return self
 }
 
-// Visit is a generic Visitor to be used with Walk
-// The actual function, which should be used during Walk
-// is held in ruleRefOptimizer.visitor
-func (r *grammarOptimizer) VisitReplace(expr Expression, replacer func(Expression)) VisitReplacer {
-	return r.visitReplacer(expr, replacer)
-}
-
 func (r *grammarOptimizer) setVisitor(visitor0 interface{}) {
-	log.Printf("setVisitor: %#v", reflect.ValueOf(visitor0))
-	if visitReplacer, ok := visitor0.(func(Expression, func(Expression)) VisitReplacer); ok {
-
-		r.visitor = func(expr Expression) Visitor {
-			if v := visitReplacer(expr, func(expr Expression) {}); v == nil {
-				return nil
-			}
-			return r
-		}
-		r.visitReplacer = visitReplacer
+	if visitor, ok := visitor0.(func(Expression, Backref) Visitor); ok {
+		r.visitor = visitor
 		return
 	}
 
 	if visitor, ok := visitor0.(func(Expression) Visitor); ok {
-		r.visitor = visitor
-		r.visitReplacer = func(expr Expression, replacer func(Expression)) VisitReplacer {
+		r.visitor = func(expr Expression, br Backref) Visitor {
 			if v := visitor(expr); v == nil {
 				return nil
 			}
@@ -136,220 +122,282 @@ func set(m map[string]map[string]struct{}, src, dst string) {
 // 	}
 // }
 
+// isSimple is a helper function that checks if an expression is simple.
+// Simple expressions do not yield values
+func (r *grammarOptimizer) isSimple(expr Expression) bool {
+	if _, ok := expr.(*LitMatcher); ok {
+		return true
+	}
+	if _, ok := expr.(*CharClassMatcher); ok {
+		return true
+	}
+	if chExpr, ok := expr.(*ChoiceExpr); ok {
+		return chExpr.Opt.SkipVals
+	}
+
+	if ruleRefExpr, ok := expr.(*RuleRefExpr); ok {
+		if ruleExpr, ok := r.rules[ruleRefExpr.Name.Val]; ok {
+			return r.isSimple(ruleExpr)
+		}
+	}
+
+	if seqExpr, ok := expr.(*SeqExpr); ok {
+		return seqExpr.Opt.ReuseVals
+	}
+
+	if _, ok := expr.(*AnyMatcher); ok {
+		return true
+	}
+
+	return false
+}
+
 // optimize is a Visitor, which is used with the Walk function
 // The purpose of this function is to perform the actual optimizations.
 // See Optimize for a detailed list of the performed optimizations.
-func (r *grammarOptimizer) optimize(expr0 Expression, replacer func(Expression)) VisitReplacer {
+func (r *grammarOptimizer) optimize(expr0 Expression, br Backref) Visitor {
 	switch expr := expr0.(type) {
 	case *ActionExpr:
-		expr.Expr = r.optimizeRule(expr.Expr)
-	case *AndExpr:
-		expr.Expr = r.optimizeRule(expr.Expr)
+		r.optActionExpr(expr)
 	case *ChoiceExpr:
-		expr.Alternatives = r.optimizeRules(expr.Alternatives)
-
-		// Optimize choice nested in choice
-		for i := 0; i < len(expr.Alternatives); i++ {
-			if choice, ok := expr.Alternatives[i].(*ChoiceExpr); ok {
-				r.optimized = true
-				if i+1 < len(expr.Alternatives) {
-					expr.Alternatives = append(expr.Alternatives[:i], append(choice.Alternatives, expr.Alternatives[i+1:]...)...)
-				} else {
-					expr.Alternatives = append(expr.Alternatives[:i], choice.Alternatives...)
-				}
-			}
-
-			// Combine sequence of single char LitMatcher to CharClassMatcher
-			if i > 0 {
-				l0, lok0 := expr.Alternatives[i-1].(*LitMatcher)
-				l1, lok1 := expr.Alternatives[i].(*LitMatcher)
-				c0, cok0 := expr.Alternatives[i-1].(*CharClassMatcher)
-				c1, cok1 := expr.Alternatives[i].(*CharClassMatcher)
-
-				combined := false
-
-				switch {
-				// Combine two LitMatcher to CharClassMatcher
-				// "a" / "b" => [ab]
-				case lok0 && lok1 && len([]rune(l0.Val)) == 1 && len([]rune(l1.Val)) == 1 && l0.IgnoreCase == l1.IgnoreCase:
-					combined = true
-					cm := CharClassMatcher{
-						Chars:      append([]rune(l0.Val), []rune(l1.Val)...),
-						IgnoreCase: l0.IgnoreCase,
-						posValue:   l0.posValue,
-					}
-					expr.Alternatives[i-1] = &cm
-
-				// Combine LitMatcher with CharClassMatcher
-				// "a" / [bc] => [abc]
-				case lok0 && cok1 && len([]rune(l0.Val)) == 1 && l0.IgnoreCase == c1.IgnoreCase && !c1.Inverted:
-					combined = true
-					c1.Chars = append(c1.Chars, []rune(l0.Val)...)
-					expr.Alternatives[i-1] = c1
-
-				// Combine CharClassMatcher with LitMatcher
-				// [ab] / "c" => [abc]
-				case cok0 && lok1 && len([]rune(l1.Val)) == 1 && c0.IgnoreCase == l1.IgnoreCase && !c0.Inverted:
-					combined = true
-					c0.Chars = append(c0.Chars, []rune(l1.Val)...)
-
-				// Combine CharClassMatcher with CharClassMatcher
-				// [ab] / [cd] => [abcd]
-				case cok0 && cok1 && c0.IgnoreCase == c1.IgnoreCase && c0.Inverted == c1.Inverted:
-					combined = true
-					c0.Chars = append(c0.Chars, c1.Chars...)
-					c0.Ranges = append(c0.Ranges, c1.Ranges...)
-					c0.UnicodeClasses = append(c0.UnicodeClasses, c1.UnicodeClasses...)
-				}
-
-				// If one of the optimizations was applied, remove the second element from Alternatives
-				if combined {
-					r.optimized = true
-					if i+1 < len(expr.Alternatives) {
-						expr.Alternatives = append(expr.Alternatives[:i], expr.Alternatives[i+1:]...)
-					} else {
-						expr.Alternatives = expr.Alternatives[:i]
-					}
-				}
-			}
-		}
-
+		r.optChoiceExpr(expr, br)
 	case *Grammar:
-		// Reset optimized at the start of each Walk.
-		r.optimized = false
-		for i := 0; i < len(expr.Rules); i++ {
-			rule := expr.Rules[i]
-			// Remove Rule, if it is no longer used by any other Rule and it is not the first Rule.
-			_, used := r.ruleUsedByRules[rule.Name.Val]
-			_, protected := r.protectedRules[rule.Name.Val]
-			if !used && !protected {
-				expr.Rules = append(expr.Rules[:i], expr.Rules[i+1:]...)
-				// Compensate for the removed item
-				i--
-
-				for k, v := range r.ruleUsedByRules {
-					for kk := range v {
-						if kk == rule.Name.Val {
-							delete(r.ruleUsedByRules[k], kk)
-							if len(r.ruleUsedByRules[k]) == 0 {
-								delete(r.ruleUsedByRules, k)
-							}
-						}
-					}
-				}
-
-				r.optimized = true
-				continue
-			}
-		}
-	case *LabeledExpr:
-		expr.Expr = r.optimizeRule(expr.Expr)
-	case *NotExpr:
-		// Remove the not by inverting the CharClassMatcher
-		expr.Expr = r.optimizeRule(expr.Expr)
-		if charClassExpr, ok := expr.Expr.(*CharClassMatcher); ok {
-			charClassExpr.Inverted = !charClassExpr.Inverted
-			charClassExpr.InlineExpr = true
-			// r.optimized = true
-			replacer(charClassExpr)
-		}
-	case *OneOrMoreExpr:
-		expr.Expr = r.optimizeRule(expr.Expr)
+		r.optGrammar(expr)
 	case *Rule:
-		r.rule = expr.Name.Val
-		expr.Expr = r.optimizeRule(expr.Expr)
+		r.optRule(expr)
+	case *RuleRefExpr:
+		r.optRuleRef(expr, br)
 	case *SeqExpr:
-		expr.Exprs = r.optimizeRules(expr.Exprs)
-
-		for i := 0; i < len(expr.Exprs); i++ {
-			// Optimize nested sequences
-			if seq, ok := expr.Exprs[i].(*SeqExpr); ok {
-				r.optimized = true
-				if i+1 < len(expr.Exprs) {
-					expr.Exprs = append(expr.Exprs[:i], append(seq.Exprs, expr.Exprs[i+1:]...)...)
-				} else {
-					expr.Exprs = append(expr.Exprs[:i], seq.Exprs...)
-				}
-			}
-
-			// Combine sequence of LitMatcher
-			if i > 0 {
-				l0, ok0 := expr.Exprs[i-1].(*LitMatcher)
-				l1, ok1 := expr.Exprs[i].(*LitMatcher)
-				if ok0 && ok1 && l0.IgnoreCase == l1.IgnoreCase {
-					r.optimized = true
-					l0.Val += l1.Val
-					expr.Exprs[i-1] = l0
-					if i+1 < len(expr.Exprs) {
-						expr.Exprs = append(expr.Exprs[:i], expr.Exprs[i+1:]...)
-					} else {
-						expr.Exprs = expr.Exprs[:i]
-					}
-				}
-			}
-		}
-
+		r.optSeqExpr(expr, br)
+	case *OneOrMoreExpr:
+		r.optOneOrMoreExpr(expr)
 	case *ZeroOrMoreExpr:
-		expr.Expr = r.optimizeRule(expr.Expr)
+		r.optZeroOrMoreExpr(expr)
 	case *ZeroOrOneExpr:
-		expr.Expr = r.optimizeRule(expr.Expr)
+		r.optZeroOrOneExpr(expr)
 	}
 	return r
 }
 
-func (r *grammarOptimizer) optimizeRules(exprs []Expression) []Expression {
-	for i := 0; i < len(exprs); i++ {
-		exprs[i] = r.optimizeRule(exprs[i])
+func (r *grammarOptimizer) optActionExpr(expr *ActionExpr) {
+	if seqExpr, ok := expr.Expr.(*SeqExpr); ok {
+		seqExpr.Opt.ReuseVals = true
 	}
-	return exprs
 }
 
-func (r *grammarOptimizer) optimizeRule(expr Expression) Expression {
-	// Optimize RuleRefExpr
-	if ruleRef, ok := expr.(*RuleRefExpr); ok {
-		if _, ok := r.ruleUsesRules[ruleRef.Name.Val]; !ok {
-			// rule not found
-			if _, ruleExists := r.rules[ruleRef.Name.Val]; !ruleExists {
-				if hack {
-					log.Printf("Rule Not Found: %s", ruleRef.Name.Val)
+func (r *grammarOptimizer) optChoiceExpr(expr *ChoiceExpr, br Backref) {
+
+	// Replace single choice with the singular alternative
+	if len(expr.Alternatives) == 1 {
+		r.optimized = true
+		br.replacer(expr.Alternatives[0])
+		return
+	}
+
+	// Optimize choice nested in choice
+	for i := 0; i < len(expr.Alternatives); i++ {
+		if choice, ok := expr.Alternatives[i].(*ChoiceExpr); ok {
+			r.optimized = true
+			if i+1 < len(expr.Alternatives) {
+				expr.Alternatives = append(expr.Alternatives[:i], append(choice.Alternatives, expr.Alternatives[i+1:]...)...)
+			} else {
+				expr.Alternatives = append(expr.Alternatives[:i], choice.Alternatives...)
+			}
+		}
+
+		// Combine sequence of single char LitMatcher to CharClassMatcher
+		if i > 0 {
+			l0, lok0 := expr.Alternatives[i-1].(*LitMatcher)
+			l1, lok1 := expr.Alternatives[i].(*LitMatcher)
+			c0, cok0 := expr.Alternatives[i-1].(*CharClassMatcher)
+			c1, cok1 := expr.Alternatives[i].(*CharClassMatcher)
+
+			combined := false
+
+			switch {
+			// Combine two LitMatcher to CharClassMatcher
+			// "a" / "b" => [ab]
+			case lok0 && lok1 && len([]rune(l0.Val)) == 1 && len([]rune(l1.Val)) == 1 && l0.IgnoreCase == l1.IgnoreCase:
+				combined = true
+				cm := CharClassMatcher{
+					Chars:      append([]rune(l0.Val), []rune(l1.Val)...),
+					IgnoreCase: l0.IgnoreCase,
+					posValue:   l0.posValue,
 				}
-				return expr
+				expr.Alternatives[i-1] = &cm
+
+			// Combine LitMatcher with CharClassMatcher
+			// "a" / [bc] => [abc]
+			case lok0 && cok1 && len([]rune(l0.Val)) == 1 && l0.IgnoreCase == c1.IgnoreCase && !c1.Inverted:
+				combined = true
+				c1.Chars = append(c1.Chars, []rune(l0.Val)...)
+				expr.Alternatives[i-1] = c1
+
+			// Combine CharClassMatcher with LitMatcher
+			// [ab] / "c" => [abc]
+			case cok0 && lok1 && len([]rune(l1.Val)) == 1 && c0.IgnoreCase == l1.IgnoreCase && !c0.Inverted:
+				combined = true
+				c0.Chars = append(c0.Chars, []rune(l1.Val)...)
+
+			// Combine CharClassMatcher with CharClassMatcher
+			// [ab] / [cd] => [abcd]
+			case cok0 && cok1 && c0.IgnoreCase == c1.IgnoreCase && c0.Inverted == c1.Inverted:
+				combined = true
+				c0.Chars = append(c0.Chars, c1.Chars...)
+				c0.Ranges = append(c0.Ranges, c1.Ranges...)
+				c0.UnicodeClasses = append(c0.UnicodeClasses, c1.UnicodeClasses...)
 			}
 
-			r.optimized = true
-			delete(r.ruleUsedByRules[ruleRef.Name.Val], r.rule)
-			if len(r.ruleUsedByRules[ruleRef.Name.Val]) == 0 {
-				delete(r.ruleUsedByRules, ruleRef.Name.Val)
+			// If one of the optimizations was applied, remove the second element from Alternatives
+			if combined {
+				r.optimized = true
+				if i+1 < len(expr.Alternatives) {
+					expr.Alternatives = append(expr.Alternatives[:i], expr.Alternatives[i+1:]...)
+				} else {
+					expr.Alternatives = expr.Alternatives[:i]
+				}
 			}
-			delete(r.ruleUsesRules[r.rule], ruleRef.Name.Val)
-			if len(r.ruleUsesRules[r.rule]) == 0 {
-				delete(r.ruleUsesRules, r.rule)
-			}
-			if hack {
-				log.Printf("optimizing ruleRef: %s", ruleRef.Name.Val)
-			}
-			// TODO: Check if reference exists, otherwise raise an error, which reference is missing!
-			return cloneExpr(r.rules[ruleRef.Name.Val].Expr)
 		}
 	}
 
-	// Remove Choices with only one Alternative left
-	if choice, ok := expr.(*ChoiceExpr); ok {
-		if len(choice.Alternatives) == 1 {
+	allSimple := true
+	for _, alt := range expr.Alternatives {
+		if !r.isSimple(alt) {
+			allSimple = false
+			break
+		}
+	}
+	if allSimple && !expr.Opt.SkipVals {
+		expr.Opt.SkipVals = true
+		r.optimized = true
+	}
+}
+
+func (r *grammarOptimizer) optGrammar(expr *Grammar) {
+	// Reset optimized at the start of each Walk.
+	r.optimized = false
+	for i := 0; i < len(expr.Rules); i++ {
+		rule := expr.Rules[i]
+		// Remove Rule, if it is no longer used by any other Rule and it is not the first Rule.
+		_, used := r.ruleUsedByRules[rule.Name.Val]
+		_, protected := r.protectedRules[rule.Name.Val]
+		if !used && !protected {
+			expr.Rules = append(expr.Rules[:i], expr.Rules[i+1:]...)
+			// Compensate for the removed item
+			i--
+
+			for k, v := range r.ruleUsedByRules {
+				for kk := range v {
+					if kk == rule.Name.Val {
+						delete(r.ruleUsedByRules[k], kk)
+						if len(r.ruleUsedByRules[k]) == 0 {
+							delete(r.ruleUsedByRules, k)
+						}
+					}
+				}
+			}
+
 			r.optimized = true
-			return choice.Alternatives[0]
+			continue
+		}
+	}
+}
+
+func (r *grammarOptimizer) optRule(expr *Rule) {
+	r.rule = expr.Name.Val
+}
+
+func (r *grammarOptimizer) optRuleRef(expr *RuleRefExpr, br Backref) {
+	if _, ok := r.ruleUsesRules[expr.Name.Val]; !ok {
+		// rule not found
+		if _, ruleExists := r.rules[expr.Name.Val]; !ruleExists {
+			// TODO: should this be an error? It's safe to skip
+			return
+		}
+
+		r.optimized = true
+		delete(r.ruleUsedByRules[expr.Name.Val], r.rule)
+		if len(r.ruleUsedByRules[expr.Name.Val]) == 0 {
+			delete(r.ruleUsedByRules, expr.Name.Val)
+		}
+		delete(r.ruleUsesRules[r.rule], expr.Name.Val)
+		if len(r.ruleUsesRules[r.rule]) == 0 {
+			delete(r.ruleUsesRules, r.rule)
+		}
+
+		br.replacer(cloneExpr(r.rules[expr.Name.Val].Expr))
+		return
+	}
+}
+
+func (r *grammarOptimizer) optSeqExpr(expr *SeqExpr, br Backref) {
+	if len(expr.Exprs) == 1 {
+		r.optimized = true
+		br.replacer(expr.Exprs[0])
+		return
+	}
+
+	for i := 0; i < len(expr.Exprs); i++ {
+		// Optimize nested sequences
+		if seq, ok := expr.Exprs[i].(*SeqExpr); ok {
+			r.optimized = true
+			if i+1 < len(expr.Exprs) {
+				expr.Exprs = append(expr.Exprs[:i], append(seq.Exprs, expr.Exprs[i+1:]...)...)
+			} else {
+				expr.Exprs = append(expr.Exprs[:i], seq.Exprs...)
+			}
+		}
+
+		// Combine sequence of LitMatcher
+		if i > 0 {
+			l0, ok0 := expr.Exprs[i-1].(*LitMatcher)
+			l1, ok1 := expr.Exprs[i].(*LitMatcher)
+			if ok0 && ok1 && l0.IgnoreCase == l1.IgnoreCase {
+				r.optimized = true
+
+				// Clone the litMatcher so it plays nice if applied after
+				// resolving ruleRefs
+				lNew := cloneExpr(l0).(*LitMatcher)
+				lNew.Val += l1.Val
+				expr.Exprs[i-1] = lNew
+
+				if i+1 < len(expr.Exprs) {
+					expr.Exprs = append(expr.Exprs[:i], expr.Exprs[i+1:]...)
+				} else {
+					expr.Exprs = expr.Exprs[:i]
+				}
+			}
 		}
 	}
 
-	// Remove Sequence with only one Expression
-	if seq, ok := expr.(*SeqExpr); ok {
-		if len(seq.Exprs) == 1 {
-			r.optimized = true
-			return seq.Exprs[0]
+	allSimple := true
+	for _, e := range expr.Exprs {
+		if !r.isSimple(e) {
+			allSimple = false
+			break
 		}
 	}
+	if allSimple && !expr.Opt.ReuseVals {
+		expr.Opt.ReuseVals = true
+		r.optimized = true
+	}
+}
 
-	return expr
+func (r *grammarOptimizer) optOneOrMoreExpr(expr *OneOrMoreExpr) {
+	if r.isSimple(expr.Expr) {
+		expr.Opt.SkipVals = true
+	}
+}
+func (r *grammarOptimizer) optZeroOrMoreExpr(expr *ZeroOrMoreExpr) {
+	if r.isSimple(expr.Expr) {
+		expr.Opt.SkipVals = true
+	}
+}
+
+func (r *grammarOptimizer) optZeroOrOneExpr(expr *ZeroOrOneExpr) {
+	if r.isSimple(expr.Expr) {
+		expr.Opt.SkipVals = true
+	}
 }
 
 // cloneExpr takes an Expression and deep clones it (including all children)
@@ -383,7 +431,6 @@ func cloneExpr(expr Expression) Expression {
 			posValue:       expr.posValue,
 			Ranges:         append([]rune{}, expr.Ranges...),
 			UnicodeClasses: append([]string{}, expr.UnicodeClasses...),
-			InlineExpr:     expr.InlineExpr,
 		}
 	case *ChoiceExpr:
 		alts := make([]Expression, 0, len(expr.Alternatives))
@@ -440,6 +487,13 @@ func cloneExpr(expr Expression) Expression {
 		return &ZeroOrOneExpr{
 			Expr: cloneExpr(expr.Expr),
 			p:    expr.p,
+		}
+
+	case *LitMatcher:
+		return &LitMatcher{
+			posValue:   expr.posValue,
+			IgnoreCase: expr.IgnoreCase,
+			invert:     expr.invert,
 		}
 	}
 	return expr

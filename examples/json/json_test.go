@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	optimized "github.com/mna/pigeon/examples/json/optimized"
+	optimizedboth "github.com/mna/pigeon/examples/json/optimized-both"
 	optimizedgrammar "github.com/mna/pigeon/examples/json/optimized-grammar"
 )
 
@@ -29,6 +30,12 @@ func TestCmpStdlib(t *testing.T) {
 		poggot, err := optimizedgrammar.ParseFile(file)
 		if err != nil {
 			t.Errorf("%s: optimizedgrammar.ParseFile: %v", file, err)
+			continue
+		}
+
+		pogbot, err := optimizedboth.ParseFile(file)
+		if err != nil {
+			t.Errorf("%s: optimizedboth.ParseFile: %v", file, err)
 			continue
 		}
 
@@ -57,6 +64,12 @@ func TestCmpStdlib(t *testing.T) {
 			t.Errorf("%s: optimized grammar not equal", file)
 			continue
 		}
+
+		if !reflect.DeepEqual(pogbot, jgot) {
+			t.Errorf("%s: optimized grammar not equal", file)
+			continue
+		}
+
 	}
 }
 
@@ -137,6 +150,10 @@ func TestForwardSlash(t *testing.T) {
 	}
 }
 
+// 19587178 ns/op	 5328725 B/op	  139820 allocs/op (no-memo)
+// 6320179 ns/op	 3087143 B/op	   69165 allocs/op (optimized-parser)
+// 5451694 ns/op	 2956742 B/op	   66490 allocs/op (optimized-both)
+
 func BenchmarkPigeonJSONNoMemo(b *testing.B) {
 	d, err := ioutil.ReadFile("testdata/github-octokit-repos.json")
 	if err != nil {
@@ -165,6 +182,8 @@ func BenchmarkPigeonJSONMemo(b *testing.B) {
 	}
 }
 
+//  6382143 ns/op	 3087055 B/op	   69164 allocs/op
+
 func BenchmarkPigeonJSONOptimized(b *testing.B) {
 	d, err := ioutil.ReadFile("testdata/github-octokit-repos.json")
 	if err != nil {
@@ -188,6 +207,22 @@ func BenchmarkPigeonJSONOptimizedGrammar(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		if _, err := optimizedgrammar.Parse("", d); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// 5451694 ns/op	 2956742 B/op	   66490 allocs/op
+
+func BenchmarkPigeonJSONOptimizedBoth(b *testing.B) {
+	d, err := ioutil.ReadFile("testdata/github-octokit-repos.json")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		if _, err := optimizedboth.Parse("", d); err != nil {
 			b.Fatal(err)
 		}
 	}

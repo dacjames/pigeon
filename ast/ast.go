@@ -91,6 +91,7 @@ type Expression interface {
 type ChoiceExpr struct {
 	p            Pos
 	Alternatives []Expression
+	Opt          optFlags
 }
 
 // NewChoiceExpr creates a choice expression at the specified position.
@@ -194,6 +195,7 @@ func (t *ThrowExpr) String() string {
 type SeqExpr struct {
 	p     Pos
 	Exprs []Expression
+	Opt   optFlags
 }
 
 // NewSeqExpr creates a new sequence expression at the specified position.
@@ -282,6 +284,7 @@ func (n *NotExpr) String() string {
 type ZeroOrOneExpr struct {
 	p    Pos
 	Expr Expression
+	Opt  optFlags
 }
 
 // NewZeroOrOneExpr creates a new zero or one expression at the specified
@@ -302,6 +305,7 @@ func (z *ZeroOrOneExpr) String() string {
 type ZeroOrMoreExpr struct {
 	p    Pos
 	Expr Expression
+	Opt  optFlags
 }
 
 // NewZeroOrMoreExpr creates a new zero or more expression at the specified
@@ -322,6 +326,7 @@ func (z *ZeroOrMoreExpr) String() string {
 type OneOrMoreExpr struct {
 	p    Pos
 	Expr Expression
+	Opt  optFlags
 }
 
 // NewOneOrMoreExpr creates a new one or more expression at the specified
@@ -456,7 +461,6 @@ type CharClassMatcher struct {
 	Chars          []rune
 	Ranges         []rune // pairs of low/high range
 	UnicodeClasses []string
-	InlineExpr     bool // expr value logic inlined by optimizer to remove out expr
 }
 
 // NewCharClassMatcher creates a new character class matcher at the specified

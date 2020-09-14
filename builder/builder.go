@@ -292,10 +292,6 @@ func (b *builder) writeCharClassMatcher(ch *ast.CharClassMatcher) {
 		b.writelnf("nil,")
 		return
 	}
-	if ch.InlineExpr {
-		b.writelnf("&charClassExpr{")
-		b.writef("matcher: ")
-	}
 	b.writelnf("&charClassMatcher{")
 	pos := ch.Pos()
 	b.writelnf("\tpos: position{line: %d, col: %d, offset: %d},", pos.Line, pos.Col, pos.Off)
@@ -336,9 +332,6 @@ func (b *builder) writeCharClassMatcher(ch *ast.CharClassMatcher) {
 	b.writelnf("\tignoreCase: %t,", ch.IgnoreCase)
 	b.writelnf("\tinverted: %t,", ch.Inverted)
 	b.writelnf("},")
-	if ch.InlineExpr {
-		b.writelnf("},")
-	}
 }
 
 // BasicLatinLookup calculates the decision results for the first 256 characters of the UTF-8 character
@@ -395,6 +388,9 @@ func (b *builder) writeChoiceExpr(ch *ast.ChoiceExpr) {
 			b.writeExpr(alt)
 		}
 		b.writelnf("\t},")
+	}
+	if ch.Opt.SkipVals {
+		b.writelnf("\tskipVals: true,")
 	}
 	b.writelnf("},")
 }
@@ -527,6 +523,9 @@ func (b *builder) writeSeqExpr(seq *ast.SeqExpr) {
 			b.writeExpr(e)
 		}
 		b.writelnf("\t},")
+		if seq.Opt.ReuseVals {
+			b.writelnf("vals: make([]interface{}, %d),", len(seq.Exprs))
+		}
 	}
 	b.writelnf("},")
 }
@@ -569,6 +568,9 @@ func (b *builder) writeZeroOrMoreExpr(zero *ast.ZeroOrMoreExpr) {
 	b.writelnf("\tpos: position{line: %d, col: %d, offset: %d},", pos.Line, pos.Col, pos.Off)
 	b.writef("\texpr: ")
 	b.writeExpr(zero.Expr)
+	if zero.Opt.SkipVals {
+		b.writelnf("\tskipVals: true,")
+	}
 	b.writelnf("},")
 }
 
@@ -677,10 +679,12 @@ func (b *builder) writeExprCode(expr ast.Expression) {
 		b.pushArgsSet()
 		b.writeExprCode(expr.Expr)
 		b.popArgsSet()
+
 	}
 }
 
 func (b *builder) writeActionExprCode(act *ast.ActionExpr) {
+
 	if act == nil {
 		return
 	}

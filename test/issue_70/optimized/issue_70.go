@@ -266,6 +266,7 @@ type rule struct {
 type choiceExpr struct {
 	pos          position
 	alternatives []interface{}
+	skipVals     bool
 }
 
 // nolint: structcheck
@@ -287,6 +288,7 @@ type recoveryExpr struct {
 type seqExpr struct {
 	pos   position
 	exprs []interface{}
+	vals  []interface{}
 }
 
 // nolint: structcheck
@@ -304,8 +306,9 @@ type labeledExpr struct {
 
 // nolint: structcheck
 type expr struct {
-	pos  position
-	expr interface{}
+	pos      position
+	expr     interface{}
+	skipVals bool
 }
 
 type andExpr expr        // nolint: structcheck
@@ -351,11 +354,6 @@ type charClassMatcher struct {
 	classes         []*unicode.RangeTable
 	ignoreCase      bool
 	inverted        bool
-}
-
-// nolint: structcheck
-type charClassExpr struct {
-	matcher *charClassMatcher
 }
 
 type anyMatcher position // nolint: structcheck
@@ -624,10 +622,6 @@ func (p *parser) failAt(fail bool, pos position, want string) {
 			p.maxFailExpected = p.maxFailExpected[:0]
 		}
 
-		if p.maxFailInvertExpected {
-			want = "!" + want
-		}
-		p.maxFailExpected = append(p.maxFailExpected, want)
 	}
 }
 
@@ -775,8 +769,6 @@ func (p *parser) parseExpr(expr interface{}) (interface{}, bool) {
 		val, ok = p.parseAnyMatcher(expr)
 	case *charClassMatcher:
 		val, ok = p.parseCharClassMatcher(expr)
-	case *charClassExpr:
-		val, ok = p.parseCharClassExpr(expr.matcher)
 	case *choiceExpr:
 		val, ok = p.parseChoiceExpr(expr)
 	case *labeledExpr:
@@ -853,101 +845,6 @@ func (p *parser) parseAnyMatcher(any *anyMatcher) (interface{}, bool) {
 	p.read()
 	p.failAt(true, start.position, ".")
 	return p.sliceFrom(start), true
-}
-
-// nolint: gocyclo
-func (p *parser) parseCharClassExpr(chr *charClassMatcher) (interface{}, bool) {
-	cur := p.pt.rn
-	start := p.pt
-
-	p.pushV()
-	var out interface{}
-	var matched bool
-
-	if cur < 128 {
-		if chr.basicLatinChars[cur] != chr.inverted {
-			p.read()
-			p.failAt(true, start.position, chr.val)
-
-			out = p.sliceFrom(start)
-			matched = true
-			goto end
-		}
-		p.failAt(false, start.position, chr.val)
-
-		goto end
-	}
-
-	// can't match EOF
-	if cur == utf8.RuneError && p.pt.w == 0 { // see utf8.DecodeRune
-		p.failAt(false, start.position, chr.val)
-		goto end
-	}
-
-	if chr.ignoreCase {
-		cur = unicode.ToLower(cur)
-	}
-
-	// try to match in the list of available chars
-	for _, rn := range chr.chars {
-		if rn == cur {
-			if chr.inverted {
-				p.failAt(false, start.position, chr.val)
-				goto end
-			}
-			p.read()
-			p.failAt(true, start.position, chr.val)
-
-			out = p.sliceFrom(start)
-			matched = true
-			goto end
-		}
-	}
-
-	// try to match in the list of ranges
-	for i := 0; i < len(chr.ranges); i += 2 {
-		if cur >= chr.ranges[i] && cur <= chr.ranges[i+1] {
-			if chr.inverted {
-				p.failAt(false, start.position, chr.val)
-				goto end
-			}
-			p.read()
-			p.failAt(true, start.position, chr.val)
-			out = p.sliceFrom(start)
-			matched = true
-			goto end
-		}
-	}
-
-	// try to match in the list of Unicode classes
-	for _, cl := range chr.classes {
-		if unicode.Is(cl, cur) {
-			if chr.inverted {
-				p.failAt(false, start.position, chr.val)
-				goto end
-			}
-			p.read()
-			p.failAt(true, start.position, chr.val)
-
-			out = p.sliceFrom(start)
-			matched = true
-			goto end
-		}
-	}
-
-	if chr.inverted {
-		p.read()
-		p.failAt(true, start.position, chr.val)
-		out = p.sliceFrom(start)
-		matched = true
-		goto end
-	}
-	p.failAt(false, start.position, chr.val)
-
-end:
-	p.popV()
-	p.restore(start)
-	return out, matched
 }
 
 // nolint: gocyclo
@@ -1028,9 +925,13 @@ func (p *parser) parseChoiceExpr(ch *choiceExpr) (interface{}, bool) {
 		// dummy assignment to prevent compile error if optimized
 		_ = altI
 
-		p.pushV()
+		if !ch.skipVals {
+			p.pushV()
+		}
 		val, ok := p.parseExpr(alt)
-		p.popV()
+		if !ch.skipVals {
+			p.popV()
+		}
 		if ok {
 			return val, ok
 		}
@@ -1100,9 +1001,13 @@ func (p *parser) parseOneOrMoreExpr(expr *oneOrMoreExpr) (interface{}, bool) {
 	var vals []interface{}
 
 	for {
-		p.pushV()
+		if !expr.skipVals {
+			p.pushV()
+		}
 		val, ok := p.parseExpr(expr.expr)
-		p.popV()
+		if !expr.skipVals {
+			p.popV()
+		}
 		if !ok {
 			if len(vals) == 0 {
 				// did not match once, no match
@@ -1137,16 +1042,20 @@ func (p *parser) parseRuleRefExpr(ref *ruleRefExpr) (interface{}, bool) {
 }
 
 func (p *parser) parseSeqExpr(seq *seqExpr) (interface{}, bool) {
-	vals := make([]interface{}, 0, len(seq.exprs))
-
 	pt := p.pt
-	for _, expr := range seq.exprs {
+	var vals []interface{}
+	if seq.vals != nil {
+		vals = seq.vals
+	} else {
+		vals = make([]interface{}, len(seq.exprs))
+	}
+	for i, expr := range seq.exprs {
 		val, ok := p.parseExpr(expr)
 		if !ok {
 			p.restore(pt)
 			return nil, false
 		}
-		vals = append(vals, val)
+		vals[i] = val
 	}
 	return vals, true
 }
@@ -1168,9 +1077,13 @@ func (p *parser) parseZeroOrMoreExpr(expr *zeroOrMoreExpr) (interface{}, bool) {
 	var vals []interface{}
 
 	for {
-		p.pushV()
+		if !expr.skipVals {
+			p.pushV()
+		}
 		val, ok := p.parseExpr(expr.expr)
-		p.popV()
+		if !expr.skipVals {
+			p.popV()
+		}
 		if !ok {
 			return vals, true
 		}
@@ -1179,9 +1092,13 @@ func (p *parser) parseZeroOrMoreExpr(expr *zeroOrMoreExpr) (interface{}, bool) {
 }
 
 func (p *parser) parseZeroOrOneExpr(expr *zeroOrOneExpr) (interface{}, bool) {
-	p.pushV()
+	if !expr.skipVals {
+		p.pushV()
+	}
 	val, _ := p.parseExpr(expr.expr)
-	p.popV()
+	if !expr.skipVals {
+		p.popV()
+	}
 	// whether it matched or not, consider it a match
 	return val, true
 }

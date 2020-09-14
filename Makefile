@@ -79,6 +79,9 @@ $(EXAMPLES_DIR)/json/optimized/json.go: $(EXAMPLES_DIR)/json/json.peg $(BINDIR)/
 $(EXAMPLES_DIR)/json/optimized-grammar/json.go: $(EXAMPLES_DIR)/json/json.peg $(BINDIR)/pigeon
 	$(BINDIR)/pigeon -nolint -optimize-grammar $< > $@
 
+$(EXAMPLES_DIR)/json/optimized-both/json.go: $(EXAMPLES_DIR)/json/json.peg $(BINDIR)/pigeon
+	$(BINDIR)/pigeon -nolint -optimize-grammar -optimize-parser $< > $@
+
 $(EXAMPLES_DIR)/calculator/calculator.go: $(EXAMPLES_DIR)/calculator/calculator.peg $(BINDIR)/pigeon
 	$(BINDIR)/pigeon -nolint $< > $@
 
